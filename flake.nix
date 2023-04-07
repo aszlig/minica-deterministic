@@ -13,15 +13,15 @@
         ca = final.runCommand "snakeoil-ca" {
           nativeBuildInputs = lib.singleton minica-deterministic;
 
-          passthru.mkCert = { domain, extraDomains ? [] }: let
+          passthru.mkCert = { domain, extraDomains ? [], serial ? 100000 }: let
             domains = lib.singleton domain ++ extraDomains;
           in final.runCommand "snakoil-cert-${domain}" {
             inherit (final.minica-deterministic) ca;
             inherit domain;
             domains = lib.concatStringsSep "," domains;
-            nativeBuildInputs = [
+            nativeBuildInputs = assert serial >= 100000; [
               (minica-deterministic.overrideAttrs (_: {
-                serial = 123456799;
+                inherit serial;
               }))
             ];
           } ''
@@ -54,7 +54,7 @@
         }));
       in patchedPkgs.minica.overrideAttrs (drv: {
         pname = "minica-deterministic";
-        serial = 123456789;
+        serial = 99999;
         postPatch = (drv.postPatch or "") + ''
           sed -i -e '
             /import.*(/,/)/ { s!"crypto/rand"!"math/rand"!g; s/"math"// }
