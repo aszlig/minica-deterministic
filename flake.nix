@@ -19,7 +19,11 @@
             inherit (final.minica-deterministic) ca;
             inherit domain;
             domains = lib.concatStringsSep "," domains;
-            nativeBuildInputs = lib.singleton minica-deterministic;
+            nativeBuildInputs = [
+              (minica-deterministic.overrideAttrs (_: {
+                serial = 123456799;
+              }))
+            ];
           } ''
             minica --ca-key "$ca/key.pem" --ca-cert "$ca/cert.pem" \
               --domains "$domains"
@@ -50,12 +54,13 @@
         }));
       in patchedPkgs.minica.overrideAttrs (drv: {
         pname = "minica-deterministic";
+        serial = 123456789;
         postPatch = (drv.postPatch or "") + ''
           sed -i -e '
             /import.*(/,/)/ { s!"crypto/rand"!"math/rand"!g; s/"math"// }
             /rand.Int(/ {
               :l; N; /}/!bl
-              c var serial = big.NewInt(123456789)
+              c var serial = big.NewInt('"$serial"')
               b
             }
             s/rand\.Reader/rand.New(rand.NewSource(123456789))/g
