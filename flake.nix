@@ -1,7 +1,7 @@
 {
   description = "Deterministic version of a minimalist CA";
 
-  inputs.nixpkgs.url = "nixpkgs/nixos-20.09";
+  inputs.nixpkgs.url = "nixpkgs/nixos-26.05";
 
   outputs = { self, nixpkgs }: let
     inherit (nixpkgs) lib;
@@ -41,14 +41,17 @@
       default = self.packages.${system}.minica-deterministic;
       minica-deterministic = let
         patchedPkgs = pkgs.extend (lib.const (super: {
-          buildGoPackage = super.buildGoPackage.override (attrs: {
+          buildGoModule = super.buildGoModule.override (attrs: {
             go = attrs.go.overrideAttrs (drv: {
               # Make MaybeReadByte a no-op, since this is used to *prevent*
               # determinism.
               postPatch = (drv.postPatch or "") + ''
-                sed -i -n -e '/^func MaybeReadByte.*{/ {
-                  p; :l; n; /^}/!bl
-                }; p' src/crypto/internal/randutil/randutil.go
+                sed -i -n -e '
+                  /^import (/,/)/ { \!"math/rand/v2"!d }
+                  /^func MaybeReadByte.*{/ {
+                    p; :l; n; /^}/!bl
+                  }; p
+                ' src/crypto/internal/randutil/randutil.go
               '';
               # Some tests fail because the test certificates expired in 2025:
               # https://github.com/golang/go/issues/71077
