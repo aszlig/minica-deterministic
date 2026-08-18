@@ -6,7 +6,7 @@
   outputs = { self, nixpkgs }: let
     inherit (nixpkgs) lib;
   in {
-    overlay = final: prev: {
+    overlays.default = final: prev: {
       minica-deterministic = let
         inherit (self.packages.${final.system}) minica-deterministic;
       in minica-deterministic // {
@@ -38,6 +38,7 @@
     };
 
     packages = lib.mapAttrs (system: pkgs: {
+      default = self.packages.${system}.minica-deterministic;
       minica-deterministic = let
         patchedPkgs = pkgs.extend (lib.const (super: {
           buildGoPackage = super.buildGoPackage.override (attrs: {
@@ -74,8 +75,6 @@
       });
     }) nixpkgs.legacyPackages;
 
-    defaultPackage = lib.mapAttrs (_: p: p.minica-deterministic) self.packages;
-
     checks = lib.mapAttrs (system: pkgs: rec {
       build = self.packages.${system}.minica-deterministic;
 
@@ -107,7 +106,7 @@
       overlay = let
         inherit (import nixpkgs {
           inherit system;
-          overlays = lib.singleton self.overlay;
+          overlays = lib.singleton self.overlays.default;
         }) minica-deterministic;
       in pkgs.runCommand "test-overlay" {
         inherit (minica-deterministic) ca;
