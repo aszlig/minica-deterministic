@@ -1,0 +1,127 @@
+diff --git a/main.go b/main.go
+index 591bf4f..afd8648 100644
+--- a/main.go
++++ b/main.go
+@@ -5,7 +5,7 @@ import (
+ 	"crypto"
+ 	"crypto/ecdsa"
+ 	"crypto/elliptic"
+-	"crypto/rand"
++	"math/rand"
+ 	"crypto/rsa"
+ 	"crypto/sha1"
+ 	"crypto/x509"
+@@ -17,7 +17,6 @@ import (
+ 	"fmt"
+ 	"io/ioutil"
+ 	"log"
+-	"math"
+ 	"math/big"
+ 	"net"
+ 	"os"
+@@ -124,12 +123,12 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
+ 	var err error
+ 	switch {
+ 	case alg == x509.RSA:
+-		key, err = rsa.GenerateKey(rand.Reader, 2048)
++		key, err = rsa.GenerateKey(rand.New(rand.NewSource(123456789)), 2048)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+ 	case alg == x509.ECDSA:
+-		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
++		key, err = ecdsa.GenerateKey(elliptic.P384(), rand.New(rand.NewSource(123456789)))
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -154,10 +153,7 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
+ }
+ 
+ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error) {
+-	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+-	if err != nil {
+-		return nil, err
+-	}
++	var serial = big.NewInt(99999)
+ 	skid, err := calculateSKID(key.Public())
+ 	if err != nil {
+ 		return nil, err
+@@ -167,8 +163,8 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
+ 			CommonName: "minica root ca " + hex.EncodeToString(serial.Bytes()[:3]),
+ 		},
+ 		SerialNumber: serial,
+-		NotBefore:    time.Now(),
+-		NotAfter:     time.Now().AddDate(100, 0, 0),
++		NotBefore:    time.Unix(1602785939, 0),
++		NotAfter:     time.Unix(1602785939, 0).AddDate(1000, 0, 0),
+ 
+ 		SubjectKeyId:          skid,
+ 		AuthorityKeyId:        skid,
+@@ -179,7 +175,7 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
+ 		MaxPathLenZero:        true,
+ 	}
+ 
+-	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
++	der, err := x509.CreateCertificate(rand.New(rand.NewSource(123456789)), template, template, key.Public(), key)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -240,7 +236,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
+ 	return skid[:], nil
+ }
+ 
+-func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm) (*x509.Certificate, error) {
++func sign(serial *big.Int, iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKeyAlgorithm) (*x509.Certificate, error) {
+ 	var cn string
+ 	if len(domains) > 0 {
+ 		cn = domains[0]
+@@ -262,10 +258,6 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+-	if err != nil {
+-		return nil, err
+-	}
+ 	template := &x509.Certificate{
+ 		DNSNames:    domains,
+ 		IPAddresses: parsedIPs,
+@@ -273,19 +265,19 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
+ 			CommonName: cn,
+ 		},
+ 		SerialNumber: serial,
+-		NotBefore:    time.Now(),
++		NotBefore:    time.Unix(1602785939, 0),
+ 		// Set the validity period to 2 years and 30 days, to satisfy the iOS and
+ 		// macOS requirements that all server certificates must have validity
+ 		// shorter than 825 days:
+ 		// https://derflounder.wordpress.com/2019/06/06/new-tls-security-requirements-for-ios-13-and-macos-catalina-10-15/
+-		NotAfter: time.Now().AddDate(2, 0, 30),
++		NotAfter: time.Unix(1602785939, 0).AddDate(1000, 0, 0),
+ 
+ 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+ 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+ 		BasicConstraintsValid: true,
+ 		IsCA:                  false,
+ 	}
+-	der, err := x509.CreateCertificate(rand.Reader, template, iss.cert, key.Public(), iss.key)
++	der, err := x509.CreateCertificate(rand.New(rand.NewSource(123456789)), template, iss.cert, key.Public(), iss.key)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -316,6 +308,7 @@ func main2() error {
+ 	var caCert = flag.String("ca-cert", "minica.pem", "Root certificate filename, PEM encoded.")
+ 	var caAlg = flag.String("ca-alg", "ecdsa", "Algorithm for any new keypairs: RSA or ECDSA.")
+ 	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
++	var serial = flag.Int64("serial", 10000, "Serial number to use for this certificate.")
+ 	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
+ 	flag.Usage = func() {
+ 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+@@ -375,6 +368,6 @@ will not overwrite existing keys or certificates.
+ 	if err != nil {
+ 		return err
+ 	}
+-	_, err = sign(issuer, domainSlice, ipSlice, alg)
++	_, err = sign(big.NewInt(*serial), issuer, domainSlice, ipSlice, alg)
+ 	return err
+ }

@@ -31,27 +31,9 @@
         });
       }));
 
-      patchCaCreation = patchedPkgs.writeScript "patch-ca-creation.sh" ''
-        #!${patchedPkgs.runtimeShell} -e
-        exec sed -i -e '
-          /import.*(/,/)/ { s!"crypto/rand"!"math/rand"!g; s/"math"// }
-          /rand.Int(/ {
-            :l; N; /}/!bl
-            c var serial = big.NewInt('"$serial"')
-            b
-          }
-          s/rand\.Reader/rand.New(rand.NewSource(123456789))/g
-          s/time\.Now()/time.Unix(1602785939, 0)/g
-          s/AddDate([^)]*)/AddDate(1000, 0, 0)/g
-        ' "$@"
-      '';
-
       minica-deterministic = patchedPkgs.minica.overrideAttrs (drv: {
         pname = "minica-deterministic";
-        serial = 99999;
-        postPatch = (drv.postPatch or "") + ''
-          ${patchCaCreation} main.go
-        '';
+        patches = (drv.patches or []) ++ [ patches/minica.patch ];
       });
       ca = patchedPkgs.runCommand "snakeoil-ca" {
         nativeBuildInputs = lib.singleton minica-deterministic;
@@ -62,12 +44,11 @@
           inherit ca domain;
           domains = lib.concatStringsSep "," domains;
           nativeBuildInputs = assert serial >= 100000; [
-            (minica-deterministic.overrideAttrs (_: {
-              inherit serial;
-            }))
+            minica-deterministic
           ];
         } ''
           minica --ca-key "$ca/key.pem" --ca-cert "$ca/cert.pem" \
+            --serial ${lib.escapeShellArg (toString serial)} \
             --domains "$domains"
           mv "$domain" "$out"
         '';
