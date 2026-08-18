@@ -7,75 +7,78 @@
     inherit (nixpkgs) lib;
   in {
     overlays.default = final: prev: {
-      minica-deterministic = let
-        inherit (self.packages.${final.system}) minica-deterministic;
-      in minica-deterministic // {
-        ca = final.runCommand "snakeoil-ca" {
-          nativeBuildInputs = lib.singleton minica-deterministic;
-
-          passthru.mkCert = { domain, extraDomains ? [], serial ? 100000 }: let
-            domains = lib.singleton domain ++ extraDomains;
-          in final.runCommand "snakoil-cert-${domain}" {
-            inherit (final.minica-deterministic) ca;
-            inherit domain;
-            domains = lib.concatStringsSep "," domains;
-            nativeBuildInputs = assert serial >= 100000; [
-              (minica-deterministic.overrideAttrs (_: {
-                inherit serial;
-              }))
-            ];
-          } ''
-            minica --ca-key "$ca/key.pem" --ca-cert "$ca/cert.pem" \
-              --domains "$domains"
-            mv "$domain" "$out"
-          '';
-        } ''
-          mkdir "$out"
-          minica --ca-key "$out/key.pem" --ca-cert "$out/cert.pem" \
-            --domains dummy.test
-        '';
-      };
+      inherit (self.packages.${final.system}) minica-deterministic;
     };
 
-    packages = lib.mapAttrs (system: pkgs: {
-      default = self.packages.${system}.minica-deterministic;
-      minica-deterministic = let
-        patchedPkgs = pkgs.extend (lib.const (super: {
-          buildGoModule = super.buildGoModule.override (attrs: {
-            go = attrs.go.overrideAttrs (drv: {
-              # Make MaybeReadByte a no-op, since this is used to *prevent*
-              # determinism.
-              postPatch = (drv.postPatch or "") + ''
-                sed -i -n -e '
-                  /^import (/,/)/ { \!"math/rand/v2"!d }
-                  /^func MaybeReadByte.*{/ {
-                    p; :l; n; /^}/!bl
-                  }; p
-                ' src/crypto/internal/randutil/randutil.go
-              '';
-              # Some tests fail because the test certificates expired in 2025:
-              # https://github.com/golang/go/issues/71077
-              doCheck = false;
-            });
+    packages = lib.mapAttrs (system: pkgs: let
+      patchedPkgs = pkgs.extend (lib.const (super: {
+        buildGoModule = super.buildGoModule.override (attrs: {
+          go = attrs.go.overrideAttrs (drv: {
+            # Make MaybeReadByte a no-op, since this is used to *prevent*
+            # determinism.
+            postPatch = (drv.postPatch or "") + ''
+              sed -i -n -e '
+                /^import (/,/)/ { \!"math/rand/v2"!d }
+                /^func MaybeReadByte.*{/ {
+                  p; :l; n; /^}/!bl
+                }; p
+              ' src/crypto/internal/randutil/randutil.go
+            '';
+            # Some tests fail because the test certificates expired in 2025:
+            # https://github.com/golang/go/issues/71077
+            doCheck = false;
           });
-        }));
-      in patchedPkgs.minica.overrideAttrs (drv: {
+        });
+      }));
+
+      patchCaCreation = patchedPkgs.writeScript "patch-ca-creation.sh" ''
+        #!${patchedPkgs.runtimeShell} -e
+        exec sed -i -e '
+          /import.*(/,/)/ { s!"crypto/rand"!"math/rand"!g; s/"math"// }
+          /rand.Int(/ {
+            :l; N; /}/!bl
+            c var serial = big.NewInt('"$serial"')
+            b
+          }
+          s/rand\.Reader/rand.New(rand.NewSource(123456789))/g
+          s/time\.Now()/time.Unix(1602785939, 0)/g
+          s/AddDate([^)]*)/AddDate(1000, 0, 0)/g
+        ' "$@"
+      '';
+
+      minica-deterministic = patchedPkgs.minica.overrideAttrs (drv: {
         pname = "minica-deterministic";
         serial = 99999;
         postPatch = (drv.postPatch or "") + ''
-          sed -i -e '
-            /import.*(/,/)/ { s!"crypto/rand"!"math/rand"!g; s/"math"// }
-            /rand.Int(/ {
-              :l; N; /}/!bl
-              c var serial = big.NewInt('"$serial"')
-              b
-            }
-            s/rand\.Reader/rand.New(rand.NewSource(123456789))/g
-            s/time\.Now()/time.Unix(1602785939, 0)/g
-            s/AddDate([^)]*)/AddDate(1000, 0, 0)/g
-          ' main.go
+          ${patchCaCreation} main.go
         '';
       });
+      ca = patchedPkgs.runCommand "snakeoil-ca" {
+        nativeBuildInputs = lib.singleton minica-deterministic;
+
+        passthru.mkCert = { domain, extraDomains ? [], serial ? 100000 }: let
+          domains = lib.singleton domain ++ extraDomains;
+        in patchedPkgs.runCommand "snakoil-cert-${domain}" {
+          inherit ca domain;
+          domains = lib.concatStringsSep "," domains;
+          nativeBuildInputs = assert serial >= 100000; [
+            (minica-deterministic.overrideAttrs (_: {
+              inherit serial;
+            }))
+          ];
+        } ''
+          minica --ca-key "$ca/key.pem" --ca-cert "$ca/cert.pem" \
+            --domains "$domains"
+          mv "$domain" "$out"
+        '';
+      } ''
+        mkdir "$out"
+        minica --ca-key "$out/key.pem" --ca-cert "$out/cert.pem" \
+          --domains dummy.test
+      '';
+    in {
+      default = self.packages.${system}.minica-deterministic;
+      minica-deterministic = minica-deterministic // { inherit ca; };
     }) nixpkgs.legacyPackages;
 
     checks = lib.mapAttrs (system: pkgs: rec {
