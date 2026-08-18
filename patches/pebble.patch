@@ -1,0 +1,177 @@
+diff --git a/ca/ca.go b/ca/ca.go
+index ae0175f..6b3583b 100644
+--- a/ca/ca.go
++++ b/ca/ca.go
+@@ -3,7 +3,10 @@ package ca
+ import (
+ 	"bytes"
+ 	"crypto"
+-	"crypto/rand"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	realrand "crypto/rand"
++	"math/rand"
+ 	"crypto/rsa"
+ 	"crypto/sha1"
+ 	"crypto/x509"
+@@ -25,11 +28,12 @@ import (
+ )
+ 
+ const (
+-	rootCAPrefix          = "Pebble Root CA "
+ 	intermediateCAPrefix  = "Pebble Intermediate CA "
+ 	defaultValidityPeriod = 157766400
+ )
+ 
++var rootCaSerial = big.NewInt(99999)
++
+ type CAImpl struct {
+ 	log              *log.Logger
+ 	db               *db.MemoryStore
+@@ -62,11 +66,15 @@ type issuer struct {
+ }
+ 
+ func makeSerial() *big.Int {
+-	serial, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+-	if err != nil {
+-		panic(fmt.Sprintf("unable to create random serial number: %s", err.Error()))
++	for {
++		serial, err := realrand.Int(realrand.Reader, big.NewInt(math.MaxInt64))
++		if err != nil {
++			panic(fmt.Sprintf("unable to create random serial number: %s", err.Error()))
++		}
++		if serial.Cmp(rootCaSerial) != 0 {
++			return serial
++		}
+ 	}
+-	return serial
+ }
+ 
+ // Taken from https://github.com/cloudflare/cfssl/blob/b94e044bb51ec8f5a7232c71b1ed05dbe4da96ce/signer/signer.go#L221-L244
+@@ -95,9 +103,9 @@ func makeSubjectKeyID(key crypto.PublicKey) ([]byte, error) {
+ // makeKey and makeRootCert are adapted from MiniCA:
+ // https://github.com/jsha/minica/blob/3a621c05b61fa1c24bcb42fbde4b261db504a74f/main.go
+ 
+-// makeKey creates a new 2048 bit RSA private key and a Subject Key Identifier
+-func makeKey() (*rsa.PrivateKey, []byte, error) {
+-	key, err := rsa.GenerateKey(rand.Reader, 2048)
++// makeKey creates a new ECDSA private key and a Subject Key Identifier
++func makeKey() (*ecdsa.PrivateKey, []byte, error) {
++	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.New(rand.NewSource(123456789)))
+ 	if err != nil {
+ 		return nil, nil, err
+ 	}
+@@ -109,17 +117,31 @@ func makeKey() (*rsa.PrivateKey, []byte, error) {
+ }
+ 
+ func (ca *CAImpl) makeRootCert(
++	isActualRootCert bool,
+ 	subjectKey crypto.Signer,
+ 	subject pkix.Name,
+ 	subjectKeyID []byte,
+ 	signer *issuer,
+ ) (*core.Certificate, error) {
+-	serial := makeSerial()
++	var serial *big.Int
++	var notBefore time.Time
++	var notAfter time.Time
++
++	if isActualRootCert {
++		serial = rootCaSerial
++		notBefore = time.Unix(1602785939, 0)
++		notAfter = time.Unix(1602785939, 0).AddDate(1000, 0, 0)
++	} else {
++		serial = makeSerial()
++		notBefore = time.Now()
++		notAfter = time.Now().AddDate(30, 0, 0)
++	}
++
+ 	template := &x509.Certificate{
+ 		Subject:      subject,
+ 		SerialNumber: serial,
+-		NotBefore:    time.Now(),
+-		NotAfter:     time.Now().AddDate(30, 0, 0),
++		NotBefore:    notBefore,
++		NotAfter:     notAfter,
+ 
+ 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+ 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+@@ -138,7 +160,7 @@ func (ca *CAImpl) makeRootCert(
+ 		parent = template
+ 	}
+ 
+-	der, err := x509.CreateCertificate(rand.Reader, template, parent, subjectKey.Public(), signerKey)
++	der, err := x509.CreateCertificate(rand.New(rand.NewSource(123456789)), template, parent, subjectKey.Public(), signerKey)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -173,9 +195,9 @@ func (ca *CAImpl) newRootIssuer(name string) (*issuer, error) {
+ 	}
+ 	// Make a self-signed root certificate
+ 	subject := pkix.Name{
+-		CommonName: rootCAPrefix + name,
++		CommonName: "snakeoil root ca",
+ 	}
+-	rc, err := ca.makeRootCert(rk, subject, subjectKeyID, nil)
++	rc, err := ca.makeRootCert(true, rk, subject, subjectKeyID, nil)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -192,7 +214,7 @@ func (ca *CAImpl) newIntermediateIssuer(root *issuer, intermediateKey crypto.Sig
+ 		return nil, errors.New("internal error: root must not be nil")
+ 	}
+ 	// Make an intermediate certificate with the root issuer
+-	ic, err := ca.makeRootCert(intermediateKey, subject, subjectKeyID, root)
++	ic, err := ca.makeRootCert(false, intermediateKey, subject, subjectKeyID, root)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -309,7 +331,7 @@ func (ca *CAImpl) newCertificate(domains []string, ips []net.IP, key crypto.Publ
+ 		template.OCSPServer = []string{ca.ocspResponderURL}
+ 	}
+ 
+-	der, err := x509.CreateCertificate(rand.Reader, template, issuer.cert.Cert, key, issuer.key)
++	der, err := x509.CreateCertificate(rand.New(rand.NewSource(123456789)), template, issuer.cert.Cert, key, issuer.key)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/wfe/nonces.go b/wfe/nonces.go
+index 24409ea..f8b8234 100644
+--- a/wfe/nonces.go
++++ b/wfe/nonces.go
+@@ -53,16 +53,7 @@ func (n *nonceMap) createNonce() string {
+ }
+ 
+ func (n *nonceMap) validNonce(nonce string) bool {
+-	n.Lock()
+-	defer n.Unlock()
+-
+-	// If the nonce is one we generated its valid
+-	if _, present := n.nonces[nonce]; present {
+-		// Strike the nonce after it has been validated
+-		// It can only be used once!
+-		delete(n.nonces, nonce)
+-		return true
+-	}
+-
+-	return false
++	// We have a patched version of Go with a deterministic RNG, let's just
++	// cheat and always report the nonce as valid.
++	return true
+ }
+diff --git a/wfe/wfe.go b/wfe/wfe.go
+index 264fd01..e22be04 100644
+--- a/wfe/wfe.go
++++ b/wfe/wfe.go
+@@ -37,10 +37,8 @@ import (
+ )
+ 
+ const (
+-	// Note: We deliberately pick endpoint paths that differ from Boulder to
+-	// exercise clients processing of the /directory response
+ 	// We export the DirectoryPath so that the pebble binary can reference it
+-	DirectoryPath     = "/dir"
++	DirectoryPath     = "/directory"
+ 	noncePath         = "/nonce-plz"
+ 	newAccountPath    = "/sign-me-up"
+ 	acctPath          = "/my-account/"

@@ -1,8 +1,8 @@
 diff --git a/main.go b/main.go
-index 591bf4f..afd8648 100644
+index 591bf4f..c7eff82 100644
 --- a/main.go
 +++ b/main.go
-@@ -5,7 +5,7 @@ import (
+@@ -5,19 +5,17 @@ import (
  	"crypto"
  	"crypto/ecdsa"
  	"crypto/elliptic"
@@ -11,7 +11,11 @@ index 591bf4f..afd8648 100644
  	"crypto/rsa"
  	"crypto/sha1"
  	"crypto/x509"
-@@ -17,7 +17,6 @@ import (
+ 	"crypto/x509/pkix"
+ 	"encoding/asn1"
+-	"encoding/hex"
+ 	"encoding/pem"
+ 	"flag"
  	"fmt"
  	"io/ioutil"
  	"log"
@@ -19,7 +23,7 @@ index 591bf4f..afd8648 100644
  	"math/big"
  	"net"
  	"os"
-@@ -124,12 +123,12 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
+@@ -124,12 +122,12 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
  	var err error
  	switch {
  	case alg == x509.RSA:
@@ -34,7 +38,7 @@ index 591bf4f..afd8648 100644
  		if err != nil {
  			return nil, err
  		}
-@@ -154,10 +153,7 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
+@@ -154,21 +152,18 @@ func makeKey(filename string, alg x509.PublicKeyAlgorithm) (crypto.Signer, error
  }
  
  func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error) {
@@ -46,8 +50,11 @@ index 591bf4f..afd8648 100644
  	skid, err := calculateSKID(key.Public())
  	if err != nil {
  		return nil, err
-@@ -167,8 +163,8 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
- 			CommonName: "minica root ca " + hex.EncodeToString(serial.Bytes()[:3]),
+ 	}
+ 	template := &x509.Certificate{
+ 		Subject: pkix.Name{
+-			CommonName: "minica root ca " + hex.EncodeToString(serial.Bytes()[:3]),
++			CommonName: "snakeoil root ca",
  		},
  		SerialNumber: serial,
 -		NotBefore:    time.Now(),
@@ -57,8 +64,11 @@ index 591bf4f..afd8648 100644
  
  		SubjectKeyId:          skid,
  		AuthorityKeyId:        skid,
-@@ -179,7 +175,7 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
- 		MaxPathLenZero:        true,
+@@ -176,10 +171,9 @@ func makeRootCert(key crypto.Signer, filename string) (*x509.Certificate, error)
+ 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+ 		BasicConstraintsValid: true,
+ 		IsCA:                  true,
+-		MaxPathLenZero:        true,
  	}
  
 -	der, err := x509.CreateCertificate(rand.Reader, template, template, key.Public(), key)
@@ -66,7 +76,7 @@ index 591bf4f..afd8648 100644
  	if err != nil {
  		return nil, err
  	}
-@@ -240,7 +236,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
+@@ -240,7 +234,7 @@ func calculateSKID(pubKey crypto.PublicKey) ([]byte, error) {
  	return skid[:], nil
  }
  
@@ -75,7 +85,7 @@ index 591bf4f..afd8648 100644
  	var cn string
  	if len(domains) > 0 {
  		cn = domains[0]
-@@ -262,10 +258,6 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
+@@ -262,10 +256,6 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
  	if err != nil {
  		return nil, err
  	}
@@ -86,7 +96,7 @@ index 591bf4f..afd8648 100644
  	template := &x509.Certificate{
  		DNSNames:    domains,
  		IPAddresses: parsedIPs,
-@@ -273,19 +265,19 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
+@@ -273,19 +263,19 @@ func sign(iss *issuer, domains []string, ipAddresses []string, alg x509.PublicKe
  			CommonName: cn,
  		},
  		SerialNumber: serial,
@@ -109,7 +119,7 @@ index 591bf4f..afd8648 100644
  	if err != nil {
  		return nil, err
  	}
-@@ -316,6 +308,7 @@ func main2() error {
+@@ -316,6 +306,7 @@ func main2() error {
  	var caCert = flag.String("ca-cert", "minica.pem", "Root certificate filename, PEM encoded.")
  	var caAlg = flag.String("ca-alg", "ecdsa", "Algorithm for any new keypairs: RSA or ECDSA.")
  	var domains = flag.String("domains", "", "Comma separated domain names to include as Server Alternative Names.")
@@ -117,7 +127,7 @@ index 591bf4f..afd8648 100644
  	var ipAddresses = flag.String("ip-addresses", "", "Comma separated IP addresses to include as Server Alternative Names.")
  	flag.Usage = func() {
  		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-@@ -375,6 +368,6 @@ will not overwrite existing keys or certificates.
+@@ -375,6 +366,6 @@ will not overwrite existing keys or certificates.
  	if err != nil {
  		return err
  	}
