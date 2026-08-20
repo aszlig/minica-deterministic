@@ -90,6 +90,13 @@
             server.
           '';
         };
+        package = lib.mkOption {
+          type = lib.types.package;
+          default = pebble-deterministic;
+          description = ''
+            Deterministic Pebble package to use for the systemd service.
+          '';
+        };
       };
 
       config.networking.firewall.enable = false;
@@ -122,7 +129,7 @@
                 strict = true;
               };
             };
-          in "${pebble-deterministic}/bin/pebble -config ${configFile}";
+          in "${cfg.package}/bin/pebble -config ${configFile}";
         };
       };
     };
