@@ -17,14 +17,7 @@
           go = attrs.go.overrideAttrs (drv: {
             # Make MaybeReadByte a no-op, since this is used to *prevent*
             # determinism.
-            postPatch = (drv.postPatch or "") + ''
-              sed -i -n -e '
-                /^import (/,/)/ { \!"math/rand/v2"!d }
-                /^func MaybeReadByte.*{/ {
-                  p; :l; n; /^}/!bl
-                }; p
-              ' src/crypto/internal/randutil/randutil.go
-            '';
+            patches = (drv.patches or []) ++ [ patches/go.patch ];
             # Some tests fail because the test certificates expired in 2025:
             # https://github.com/golang/go/issues/71077
             doCheck = false;
